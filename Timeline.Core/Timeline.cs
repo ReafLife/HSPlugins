@@ -35,6 +35,7 @@ using ExtensibleSaveFormat;
 using Sideloader.AutoResolver;
 using ADV.Commands.Object;
 using static ADV.Program;
+using HarmonyLib.Tools;
 #elif AISHOUJO || HONEYSELECT2
 using CharaUtils;
 using ExtensibleSaveFormat;
@@ -3894,10 +3895,13 @@ namespace Timeline
             writer.WriteAttributeString("timeScale", XmlConvert.ToString(Time.timeScale));
             foreach (INode node in _interpolablesTree.tree)
                 WriteInterpolableTree(node, writer, dic);
+
+            Logger.LogInfo("Called SceneWrite");
         }
 
         private void SceneLoad(XmlNode node, List<KeyValuePair<int, ObjectCtrlInfo>> dic)
         {
+            Logger.LogInfo("Called SceneLoad");
             ReadInterpolableTree(node, dic);
 
             if (node.Attributes["duration"] != null)
@@ -4062,7 +4066,7 @@ namespace Timeline
                     {
                         int objectIndex = XmlConvert.ToInt32(interpolableNode.Attributes["objectIndex"].Value);
 
-                        if (SaveXMLNewVer.Value == false)
+                        if (interpolableNode.Attributes["saveVersion"] == null)
                         {
                             if (objectIndex >= dic.Count)
                             {
@@ -4073,7 +4077,7 @@ namespace Timeline
                         }
                         else
                         {
-                            if(!Studio.Studio.Instance.dicObjectCtrl.TryGetValue(objectIndex, out oci))
+                            if (!Studio.Studio.Instance.dicObjectCtrl.TryGetValue(objectIndex, out oci))
                             {
                                 return;
                             }
@@ -4181,6 +4185,11 @@ namespace Timeline
                         }
 
                         localWriter.WriteStartElement("interpolable");
+                        if (SaveXMLNewVer.Value)
+                        {
+                            localWriter.WriteAttributeString("saveVersion", "2.0");
+                        }
+
                         localWriter.WriteAttributeString("enabled", XmlConvert.ToString(interpolable.enabled));
                         localWriter.WriteAttributeString("owner", interpolable.owner);
                         if (objectIndex != -1)
