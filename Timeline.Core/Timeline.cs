@@ -302,6 +302,7 @@ namespace Timeline
         internal static ConfigEntry<KeyboardShortcut> ConfigKeyframeCutShortcut { get; private set; }
         internal static ConfigEntry<KeyboardShortcut> ConfigKeyframePasteShortcut { get; private set; }
         internal static ConfigEntry<Autoplay> ConfigAutoplay { get; private set; }
+        internal static ConfigEntry<bool> SaveXMLNewVer { get; private set; }
 
         internal enum Autoplay
         {
@@ -322,6 +323,7 @@ namespace Timeline
             ConfigKeyframeCutShortcut = Config.Bind("Config", "Cut Keyframes", new KeyboardShortcut(KeyCode.X, KeyCode.LeftControl));
             ConfigKeyframePasteShortcut = Config.Bind("Config", "PasteKeyframes", new KeyboardShortcut(KeyCode.V, KeyCode.LeftControl));
             ConfigAutoplay = Config.Bind("Config", "Autoplay", Autoplay.Ignore);
+            SaveXMLNewVer = Config.Bind("Config", "Save new version", false);
 
             _self = this;
             Logger = base.Logger;
@@ -393,6 +395,8 @@ namespace Timeline
                 while (guideObject != null)
                 {
                     ObjectCtrlInfo newOCI = Studio.Studio.Instance.dicObjectCtrl.FirstOrDefault(p => p.Value.guideObject == guideObject).Value;
+
+                    Logger.LogInfo("curr Object DicKey :" + newOCI.objectInfo.dicKey + " , name : " + newOCI.guideObject.transformTarget.name);
                     if (newOCI != null)
                     {
                         objectCtrlInfo = newOCI;
@@ -514,7 +518,7 @@ namespace Timeline
             _self.Interpolate(false);
             isPlaying = false;
         }
-        
+
         /// <summary>
         /// Move playback cursor to the previous frame (based on desired framerate).
         /// </summary>
@@ -679,50 +683,6 @@ namespace Timeline
                 if (_self._ui.gameObject.activeSelf != value)
                     _self.ToggleUiVisible();
             }
-        }
-
-        /// <summary>
-        /// Get an estimation of the real duration of the entire timeline, accounting for time scale changes.
-        /// Calculation cost is not trivial (expect ~1ms execution cost for 50 seconds of timeline).
-        /// </summary>
-        public static float EstimateRealDuration()
-        {
-            float realDuration = 0;
-            Interpolable interpolable = _self._interpolables.Values.FirstOrDefault(x => x.id == "timeScale");
-            if (interpolable == null)
-                return (Time.timeScale == 0) ? duration : duration / Time.timeScale;
-
-            List<KeyValuePair<float, Keyframe>> keyframes = interpolable.keyframes.TakeWhile(x => x.Key <= duration).ToList();
-            if (keyframes.Count == 0)
-                return (Time.timeScale == 0) ? duration : duration / Time.timeScale;
-
-            // In the interval [0, firstKeyframe], Timeline uses the value of the first keyframe
-            realDuration += keyframes.First().Key / (float)keyframes.First().Value.value;
-
-            KeyValuePair<float, Keyframe> keyframeAfterEnd = interpolable.keyframes.FirstOrDefault(x => x.Key > duration);
-            if (!keyframeAfterEnd.Equals(default(KeyValuePair<float, Keyframe>)))
-            {
-                // In the interval [lastKeyframe, duration], Timeline still interpolates if there is a keyframe outside of the duration window
-                KeyValuePair<float, Keyframe> lastKeyframe = keyframes.Last();
-                float normalizedTime = (duration - lastKeyframe.Key) / (keyframeAfterEnd.Key - lastKeyframe.Key);
-                float normalizedValue = keyframeAfterEnd.Value.curve.Evaluate(normalizedTime);
-                float valueAtEnd = (float)lastKeyframe.Value.value + normalizedValue * ((float)keyframeAfterEnd.Value.value - (float)lastKeyframe.Value.value);
-                realDuration += IntegrateTimescaleReciprocal(keyframeAfterEnd.Value.curve, (float)lastKeyframe.Value.value, valueAtEnd, duration - lastKeyframe.Key);
-            }
-            else
-            {
-                // In the interval [lastKeyframe, duration], Timeline uses the value of the last keyframe
-                realDuration += (duration - keyframes.Last().Key) / (float)keyframes.Last().Value.value;
-            }
-
-            for (int i = 0; i < keyframes.Count - 1; i++)
-            {
-                KeyValuePair<float, Keyframe> current = keyframes.ElementAt(i);
-                KeyValuePair<float, Keyframe> next = keyframes.ElementAt(i + 1);
-                float value = IntegrateTimescaleReciprocal(current.Value.curve, (float)current.Value.value, (float)next.Value.value, next.Key - current.Key);
-                realDuration += value;
-            }
-            return realDuration;
         }
 
         public static RectTransform MainWindowRectTransform => _self._timelineWindow;
@@ -945,13 +905,13 @@ namespace Timeline
                 else
                 {
                     if (e.scrollDelta.y > 0)
-                      interpolableHeight = Mathf.Min(interpolableHeight + 1, _interpolableMaxHeight);
+                        interpolableHeight = Mathf.Min(interpolableHeight + 1, _interpolableMaxHeight);
                     else
-                      interpolableHeight = Mathf.Max(interpolableHeight - 1, _interpolableMinHeight);
+                        interpolableHeight = Mathf.Max(interpolableHeight - 1, _interpolableMinHeight);
 
                     UpdateInterpolablesView();
                 }
-              };
+            };
             DragHandler handler = _gridTop.gameObject.AddComponent<DragHandler>();
             //handler.onBeginDrag = (e) =>
             //{
@@ -1197,37 +1157,6 @@ namespace Timeline
             return minutes * 60 + seconds;
         }
 
-        // Estimate the real time duration when timescale changes from startTimescale to endTimescale over duration according to curve.
-        private static float IntegrateTimescaleReciprocal(AnimationCurve curve, float startTimescale, float endTimescale, float duration)
-        {
-            const int STEPS_PER_SECOND = 20;
-            int steps = Mathf.FloorToInt(STEPS_PER_SECOND * duration);
-            steps = Math.Max(steps, STEPS_PER_SECOND);
-
-            Func<float, float> reciprocal = (t) =>
-            {
-                float value = startTimescale + curve.Evaluate(t) * (endTimescale - startTimescale);
-                return Mathf.Approximately(value, 0f) ? 0f : 1f / value;
-            };
-
-            float total = 0f;
-            float dt = 1f / steps;
-
-            for (int i = 0; i < steps; i++)
-            {
-                float t = i * dt;
-
-                float k1 = dt * reciprocal(t);
-                float k2 = dt * reciprocal(t + dt / 2);
-                float k3 = dt * reciprocal(t + dt / 2);
-                float k4 = dt * reciprocal(t + dt);
-
-                total += (k1 + 2 * k2 + 2 * k3 + k4) / 6;
-            }
-
-            return total * duration;
-        }
-
         #region Main Window
         private void UpdateCursor()
         {
@@ -1325,11 +1254,11 @@ namespace Timeline
             _verticalScrollView.verticalNormalizedPosition = 1f;    // Reset scroll position
         }
 
-        private void UpdateFilterRegex( string filterText )
+        private void UpdateFilterRegex(string filterText)
         {
             filterText = filterText.Trim();
 
-            if ( string.IsNullOrEmpty(filterText) )
+            if (string.IsNullOrEmpty(filterText))
             {
                 _interpolablesSearchRegex = new Regex(".*", RegexOptions.IgnoreCase);
                 return;
@@ -1337,8 +1266,8 @@ namespace Timeline
 
             var filters = filterText.Split('|');
             StringBuilder builder = new StringBuilder();
-            
-            for( int i = 0; i < filters.Length; ++i )
+
+            for (int i = 0; i < filters.Length; ++i)
             {
                 var filter = filters[i].Trim();
 
@@ -1385,9 +1314,9 @@ namespace Timeline
                 {
                     _interpolablesSearchRegex = new Regex(builder.ToString(), RegexOptions.IgnoreCase);
                     return;
-                }   
+                }
             }
-            catch( System.Exception e )
+            catch (System.Exception e)
             {
                 Logger.LogError(e);
             }
@@ -1422,9 +1351,9 @@ namespace Timeline
             return true;
         }
 
-        private bool IsFilterInterpolationMatch( InterpolableModel interpolableModel )
+        private bool IsFilterInterpolationMatch(InterpolableModel interpolableModel)
         {
-            if( interpolableModel is Interpolable interporable && _interpolablesSearchRegex.IsMatch(interporable.alias) )
+            if (interpolableModel is Interpolable interporable && _interpolablesSearchRegex.IsMatch(interporable.alias))
                 return true;
 
             return _interpolablesSearchRegex.IsMatch(interpolableModel.name);
@@ -2255,7 +2184,7 @@ namespace Timeline
 
             if (scrollTo)
             {
-                var rectTransform = (RectTransform)display.container.parent;                
+                var rectTransform = (RectTransform)display.container.parent;
                 var parent = (RectTransform)rectTransform.parent;
                 var view = (RectTransform)parent.parent;
 
@@ -2346,7 +2275,7 @@ namespace Timeline
                 Vector2 min = new Vector2(Mathf.Min(_areaSelectFirstPoint.x, localPoint.x), Mathf.Min(_areaSelectFirstPoint.y, localPoint.y));
                 Vector2 max = new Vector2(Mathf.Max(_areaSelectFirstPoint.x, localPoint.x), Mathf.Max(_areaSelectFirstPoint.y, localPoint.y));
 
-                if( Input.GetKey(KeyCode.LeftAlt) )
+                if (Input.GetKey(KeyCode.LeftAlt))
                 {
                     //Maximize the top and bottom of the selection
                     var rect = _keyframesContainer.rect;
@@ -2384,7 +2313,7 @@ namespace Timeline
             float minY = Mathf.Min(_areaSelectFirstPoint.y, localPoint.y);
             float maxY = Mathf.Max(_areaSelectFirstPoint.y, localPoint.y);
 
-            if (Input.GetKey(KeyCode.LeftAlt) )
+            if (Input.GetKey(KeyCode.LeftAlt))
             {
                 //Maximize the top and bottom of the selection
                 var rect = _keyframesContainer.rect;
@@ -2678,7 +2607,7 @@ namespace Timeline
 
                                         int index = _selectedKeyframes.FindIndex(k => k.Value == pair.Key.keyframe);
                                         if (index != -1)
-                                            _selectedKeyframes[index] = new KeyValuePair<float, Keyframe>(time, pair.Key.keyframe);
+                                        _selectedKeyframes[index] = new KeyValuePair<float, Keyframe>(time, pair.Key.keyframe);
                                     }
 
                                     e.Reset();
@@ -3168,7 +3097,6 @@ namespace Timeline
         {
             if (_selectedKeyframes.Count != 1)
                 return;
-
             KeyValuePair<float, Keyframe> firstSelected = _selectedKeyframes[0];
             KeyValuePair<float, Keyframe> keyframe = firstSelected.Value.parent.keyframes.LastOrDefault(f => f.Key < firstSelected.Key);
             if (keyframe.Value != null)
@@ -3179,7 +3107,6 @@ namespace Timeline
         {
             if (_selectedKeyframes.Count != 1)
                 return;
-
             KeyValuePair<float, Keyframe> firstSelected = _selectedKeyframes[0];
             KeyValuePair<float, Keyframe> keyframe = firstSelected.Value.parent.keyframes.FirstOrDefault(f => f.Key > firstSelected.Key);
             if (keyframe.Value != null)
@@ -3189,20 +3116,13 @@ namespace Timeline
         private void UseCurrentTime()
         {
             float currentTime = _playbackTime % _duration;
-            if (currentTime == 0f && _playbackTime == _duration)
-                currentTime = _duration;
             SaveKeyframeTime(currentTime);
             UpdateKeyframeTimeTextField();
         }
 
         private void DragAtCurrentTime()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             float currentTime = _playbackTime % _duration;
-            if (currentTime == 0f && _playbackTime == _duration)
-                currentTime = _duration;
             float min = _selectedKeyframes.Min(k => k.Key);
 
             // Checking if all keyframes can be moved.
@@ -3247,9 +3167,6 @@ namespace Timeline
 
         private void OnCurveMouseDown(PointerEventData eventData)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             if (eventData.button == PointerEventData.InputButton.Middle && Input.GetKey(KeyCode.LeftControl) == false && RectTransformUtility.ScreenPointToLocalPointInRectangle(_curveContainer.rectTransform, eventData.position, eventData.pressEventCamera, out Vector2 localPoint))
             {
                 float time = localPoint.x / _curveContainer.rectTransform.rect.width;
@@ -3278,9 +3195,6 @@ namespace Timeline
 
         private void UpdateCurvePointTime(string s)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex >= 1 && _selectedKeyframeCurvePointIndex < curve.length - 1)
             {
@@ -3304,9 +3218,6 @@ namespace Timeline
 
         private void UpdateCurvePointTime(float f)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex >= 1 && _selectedKeyframeCurvePointIndex < curve.length - 1)
             {
@@ -3326,9 +3237,6 @@ namespace Timeline
 
         private void UpdateCurvePointTime()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             UnityEngine.Keyframe curveKey;
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex != -1 && _selectedKeyframeCurvePointIndex < curve.length)
@@ -3341,9 +3249,6 @@ namespace Timeline
 
         private void UpdateCurvePointValue(string s)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex >= 1 && _selectedKeyframeCurvePointIndex < curve.length - 1)
             {
@@ -3363,9 +3268,6 @@ namespace Timeline
 
         private void UpdateCurvePointValue(float f)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex >= 1 && _selectedKeyframeCurvePointIndex < curve.length - 1)
             {
@@ -3381,9 +3283,6 @@ namespace Timeline
 
         private void UpdateCurvePointValue()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             UnityEngine.Keyframe curveKey;
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex != -1 && _selectedKeyframeCurvePointIndex < curve.length)
@@ -3396,9 +3295,6 @@ namespace Timeline
 
         private void UpdateCurvePointInTangent(string s)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex != -1 && _selectedKeyframeCurvePointIndex < curve.length)
             {
@@ -3421,9 +3317,6 @@ namespace Timeline
 
         private void UpdateCurvePointInTangent(float f)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex != -1 && _selectedKeyframeCurvePointIndex < curve.length)
             {
@@ -3442,9 +3335,6 @@ namespace Timeline
 
         private void UpdateCurvePointInTangent()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             UnityEngine.Keyframe curveKey;
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex != -1 && _selectedKeyframeCurvePointIndex < curve.length)
@@ -3458,9 +3348,6 @@ namespace Timeline
 
         private void UpdateCurvePointOutTangent(string s)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex != -1 && _selectedKeyframeCurvePointIndex < curve.length)
             {
@@ -3483,9 +3370,6 @@ namespace Timeline
 
         private void UpdateCurvePointOutTangent(float f)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex != -1 && _selectedKeyframeCurvePointIndex < curve.length)
             {
@@ -3504,9 +3388,6 @@ namespace Timeline
 
         private void UpdateCurvePointOutTangent()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             UnityEngine.Keyframe curveKey;
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             if (_selectedKeyframeCurvePointIndex != -1 && _selectedKeyframeCurvePointIndex < curve.length)
@@ -3520,17 +3401,11 @@ namespace Timeline
 
         private void CopyKeyframeCurve()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             _copiedKeyframeCurve.keys = _selectedKeyframes[0].Value.curve.keys;
         }
 
         private void PasteKeyframeCurve()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             _selectedKeyframes[0].Value.curve.keys = _copiedKeyframeCurve.keys;
             SaveKeyframeCurve();
             UpdateCurve();
@@ -3538,9 +3413,6 @@ namespace Timeline
 
         private void InvertKeyframeCurve()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             UnityEngine.Keyframe[] keys = curve.keys;
             for (int i = 0; i < keys.Length; i++)
@@ -3562,9 +3434,6 @@ namespace Timeline
 
         private void ApplyKeyframeCurvePreset(AnimationCurve preset)
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             _selectedKeyframes[0].Value.curve = new AnimationCurve(preset.keys);
             SaveKeyframeCurve();
             UpdateCurve();
@@ -3679,9 +3548,6 @@ namespace Timeline
 
         private void SaveKeyframeCurve()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             AnimationCurve modifiedCurve = _selectedKeyframes[0].Value.curve;
             foreach (KeyValuePair<float, Keyframe> pair in _selectedKeyframes)
                 pair.Value.curve = new AnimationCurve(modifiedCurve.keys);
@@ -3715,9 +3581,6 @@ namespace Timeline
 
         private void UpdateKeyframeTimeTextField()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             float t = _selectedKeyframes[0].Key;
             foreach (KeyValuePair<float, Keyframe> pair in _selectedKeyframes)
             {
@@ -3732,9 +3595,6 @@ namespace Timeline
 
         private void UpdateKeyframeValueText()
         {
-            if (_selectedKeyframes.Count == 0)
-                return;
-
             object v = _selectedKeyframes[0].Value.value;
             foreach (KeyValuePair<float, Keyframe> pair in _selectedKeyframes)
             {
@@ -3751,7 +3611,6 @@ namespace Timeline
         {
             if (_selectedKeyframes.Count == 0)
                 return;
-
             AnimationCurve curve = _selectedKeyframes[0].Value.curve;
             foreach (KeyValuePair<float, Keyframe> pair in _selectedKeyframes)
             {
@@ -4203,9 +4062,23 @@ namespace Timeline
                     else if (interpolableNode.Attributes["objectIndex"] != null)
                     {
                         int objectIndex = XmlConvert.ToInt32(interpolableNode.Attributes["objectIndex"].Value);
-                        if (objectIndex >= dic.Count)
-                            return;
-                        oci = dic[objectIndex].Value;
+
+                        if (interpolableNode.Attributes["saveVersion"] == null)
+                        {
+                            if (objectIndex >= dic.Count)
+                            {
+                                return;
+                            }
+
+                            oci = dic[objectIndex].Value;
+                        }
+                        else
+                        {
+                            if (!Studio.Studio.Instance.dicObjectCtrl.TryGetValue(objectIndex, out oci))
+                            {
+                                return;
+                            }
+                        }
                     }
 
                     string id = interpolableNode.Attributes["id"].Value;
@@ -4289,18 +4162,36 @@ namespace Timeline
                     try
                     {
                         int objectIndex = -1;
-                        if (interpolable.oci != null)
+                        if (SaveXMLNewVer.Value == false)
                         {
-                            objectIndex = dic.FindIndex(e => e.Value == interpolable.oci);
-                            if (objectIndex == -1)
-                                return;
+                            if (interpolable.oci != null)
+                            {
+                                objectIndex = dic.FindIndex(e => e.Value == interpolable.oci);
+                                if (objectIndex == -1)
+                                    return;
+                            }
+                        }
+                        else
+                        {
+                            if (interpolable.oci != null)
+                            {
+                                objectIndex = interpolable.oci.objectInfo.dicKey;
+                                if (objectIndex == -1)
+                                    return;
+                            }
                         }
 
                         localWriter.WriteStartElement("interpolable");
+                        if (SaveXMLNewVer.Value)
+                        {
+                            localWriter.WriteAttributeString("saveVersion", "2.0");
+                        }
+
                         localWriter.WriteAttributeString("enabled", XmlConvert.ToString(interpolable.enabled));
                         localWriter.WriteAttributeString("owner", interpolable.owner);
                         if (objectIndex != -1)
                             localWriter.WriteAttributeString("objectIndex", XmlConvert.ToString(objectIndex));
+
                         localWriter.WriteAttributeString("id", interpolable.id);
 
                         if (interpolable.writeParameterToXml != null)
@@ -4478,19 +4369,19 @@ namespace Timeline
             if (go == null || !Input.GetKey(KeyCode.LeftAlt))
                 return;
 
-            var interpolables = _self._interpolables.Where(i => i.Value.parameter is GuideObject g && g == go).Select( pair => pair.Value ).ToArray();
+            var interpolables = _self._interpolables.Where(i => i.Value.parameter is GuideObject g && g == go).Select(pair => pair.Value).ToArray();
 
             if (interpolables.Length <= 0)
                 return;
 
             int select = 0;
 
-            if(interpolables.Length > 1)
+            if (interpolables.Length > 1)
             {
                 //If there is a mode selected in the studio, select that interpolation.
                 string keyword = null;
 
-                switch(manager.mode)
+                switch (manager.mode)
                 {
                     case 0:
                         keyword = "Position";
@@ -4505,10 +4396,10 @@ namespace Timeline
                         break;
                 }
 
-                if( keyword != null )
+                if (keyword != null)
                 {
-                    for( int i = 0; i < interpolables.Length; ++i )
-                        if( interpolables[i].name.Contains(keyword) )
+                    for (int i = 0; i < interpolables.Length; ++i)
+                        if (interpolables[i].name.Contains(keyword))
                         {
                             select = i;
                             break;

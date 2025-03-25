@@ -237,6 +237,7 @@ namespace HSUS.Features
             private bool _clipboardEmpty = true;
             private Vector3 _savedPosition;
             private Vector3 _savedRotation;
+            private Quaternion _savedRotationQ;
             private Vector3 _savedScale;
 
             private bool _draggingXPos = false;
@@ -543,9 +544,50 @@ namespace HSUS.Features
 
                 if (HSUS._self.binary == Binary.Studio)
                     if (HSUS.CopyTransformHotkey.Value.IsDown())
-                        CopyTransform();
+                    {
+                        if (_hashSelectObject.Count == 1)
+                        {
+                            //GuideObject source = _hashSelectObject.First();
+                            //_savedPosition = source.changeAmount.pos;
+                            //_savedRotation = source.changeAmount.rot;
+                            //_savedScale = source.changeAmount.scale;
+
+                            GuideObject source = _hashSelectObject.First();
+                            _savedPosition = source.transformTarget.position;
+                            _savedRotationQ = source.transformTarget.rotation;
+                            _savedScale = source.transformTarget.localScale;
+                            _clipboardEmpty = false;
+                            UpdateButtonsVisibility();
+                        }
+                        else if (_hashSelectObject.Count > 1)
+                            HSUS.Logger.LogMessage("Please select only 1 object when copying to prevent ambiguity");
+                    }
                     else if (HSUS.PasteTransformHotkey.Value.IsDown())
-                        PasteTransform();
+                    {
+                        if (_hashSelectObject.Count == 1 && _clipboardEmpty == false)
+                        {
+                            GuideObject source = _hashSelectObject.First();
+
+                            Vector3 backPos = source.transformTarget.position;
+                            Quaternion backRot = source.transformTarget.rotation;
+                            Vector3 backScale = source.transformTarget.localScale;
+
+                            source.transformTarget.position = _savedPosition;
+                            source.transformTarget.rotation = _savedRotationQ;
+                            source.transformTarget.localScale = _savedScale;
+
+                            _savedPosition = source.transformTarget.localPosition;
+                            _savedRotationQ = source.transformTarget.localRotation;
+                            _savedScale = source.transformTarget.localScale;
+                            _savedRotation = _savedRotationQ.eulerAngles;
+
+                            source.transformTarget.position = backPos;
+                            source.transformTarget.rotation = backRot;
+                            source.transformTarget.localScale = backScale;
+
+                            PasteTransform();
+                        }
+                    }
                     else if (HSUS.PasteTransformPositionOnlyHotkey.Value.IsDown())
                         PasteTransform(true, false, false);
                     else if (HSUS.PasteTransformRotationOnlyHotkey.Value.IsDown())
