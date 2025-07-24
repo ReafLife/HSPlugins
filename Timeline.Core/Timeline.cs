@@ -4074,10 +4074,14 @@ namespace Timeline
                         }
                         else
                         {
+                            Logger.LogInfo("loaded new version timeline objectIndex");
+
                             if (!Studio.Studio.Instance.dicObjectCtrl.TryGetValue(objectIndex, out oci))
                             {
                                 return;
                             }
+
+                            Logger.LogInfo("objectIndex : " + objectIndex + "  object name :" + oci.guideObject.transformTarget.name);
                         }
                     }
 
