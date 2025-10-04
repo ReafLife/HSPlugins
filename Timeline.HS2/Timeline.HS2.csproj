@@ -139,6 +139,9 @@
     <Analyzer Include="..\packages\BepInEx.Analyzers.1.0.4\analyzers\dotnet\cs\BepInEx.Analyzers.dll" />
     <Analyzer Include="..\packages\Microsoft.Unity.Analyzers.1.25.0\analyzers\dotnet\cs\Microsoft.Unity.Analyzers.dll" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="test.cs" />
+  </ItemGroup>
   <Import Project="..\Timeline.Core\Timeline.Core.projitems" Label="Shared" />
   <Import Project="..\UIUtility\UIUtility.projitems" Label="Shared" />
   <Import Project="..\ToolBox\ToolBox.projitems" Label="Shared" />
