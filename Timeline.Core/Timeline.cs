@@ -308,6 +308,7 @@ namespace Timeline
         internal static ConfigEntry<KeyboardShortcut> ConfigKeyframeCutShortcut { get; private set; }
         internal static ConfigEntry<KeyboardShortcut> ConfigKeyframePasteShortcut { get; private set; }
         internal static ConfigEntry<Autoplay> ConfigAutoplay { get; private set; }
+        internal static ConfigEntry<bool> SaveXMLNewVer { get; private set; }
 
         internal enum Autoplay
         {
@@ -328,6 +329,7 @@ namespace Timeline
             ConfigKeyframeCutShortcut = Config.Bind("Config", "Cut Keyframes", new KeyboardShortcut(KeyCode.X, KeyCode.LeftControl));
             ConfigKeyframePasteShortcut = Config.Bind("Config", "PasteKeyframes", new KeyboardShortcut(KeyCode.V, KeyCode.LeftControl));
             ConfigAutoplay = Config.Bind("Config", "Autoplay", Autoplay.Ignore);
+            SaveXMLNewVer = Config.Bind("Config", "Save new version", false);
 
             _self = this;
             Logger = base.Logger;
@@ -399,6 +401,8 @@ namespace Timeline
                 while (guideObject != null)
                 {
                     ObjectCtrlInfo newOCI = Studio.Studio.Instance.dicObjectCtrl.FirstOrDefault(p => p.Value.guideObject == guideObject).Value;
+
+                    Logger.LogInfo("curr Object DicKey :" + newOCI.objectInfo.dicKey + " , name : " + newOCI.guideObject.transformTarget.name);
                     if (newOCI != null)
                     {
                         objectCtrlInfo = newOCI;
@@ -518,7 +522,7 @@ namespace Timeline
             _self.Interpolate(false);
             isPlaying = false;
         }
-        
+
         /// <summary>
         /// Move playback cursor to the previous frame (based on desired framerate).
         /// </summary>
@@ -949,13 +953,13 @@ namespace Timeline
                 else
                 {
                     if (e.scrollDelta.y > 0)
-                      interpolableHeight = Mathf.Min(interpolableHeight + 1, _interpolableMaxHeight);
+                        interpolableHeight = Mathf.Min(interpolableHeight + 1, _interpolableMaxHeight);
                     else
-                      interpolableHeight = Mathf.Max(interpolableHeight - 1, _interpolableMinHeight);
+                        interpolableHeight = Mathf.Max(interpolableHeight - 1, _interpolableMinHeight);
 
                     UpdateInterpolablesView();
                 }
-              };
+            };
             DragHandler handler = _gridTop.gameObject.AddComponent<DragHandler>();
             //handler.onBeginDrag = (e) =>
             //{
@@ -1340,7 +1344,7 @@ namespace Timeline
 
             var filters = filterText.Split('|');
             StringBuilder builder = new StringBuilder();
-            
+
             for( int i = 0; i < filters.Length; ++i )
             {
                 var filter = filters[i].Trim();
@@ -1388,7 +1392,7 @@ namespace Timeline
                 {
                     _interpolablesSearchRegex = new Regex(builder.ToString(), RegexOptions.IgnoreCase);
                     return;
-                }   
+                }
             }
             catch( System.Exception e )
             {
@@ -2258,7 +2262,7 @@ namespace Timeline
 
             if (scrollTo)
             {
-                var rectTransform = (RectTransform)display.container.parent;                
+                var rectTransform = (RectTransform)display.container.parent;
                 var parent = (RectTransform)rectTransform.parent;
                 var view = (RectTransform)parent.parent;
 
@@ -2681,7 +2685,7 @@ namespace Timeline
 
                                         int index = _selectedKeyframes.FindIndex(k => k.Value == pair.Key.keyframe);
                                         if (index != -1)
-                                            _selectedKeyframes[index] = new KeyValuePair<float, Keyframe>(time, pair.Key.keyframe);
+                                        _selectedKeyframes[index] = new KeyValuePair<float, Keyframe>(time, pair.Key.keyframe);
                                     }
 
                                     e.Reset();
@@ -3960,7 +3964,7 @@ namespace Timeline
             var node = GetSceneInfo() ?? new XmlDocument().CreateElement("root");
             SceneLoad(path, node);
         }
-            
+
         private void OnSceneImport(string path)
         {
             var node = GetSceneInfo();
@@ -4204,9 +4208,27 @@ namespace Timeline
                     else if (interpolableNode.Attributes["objectIndex"] != null)
                     {
                         int objectIndex = XmlConvert.ToInt32(interpolableNode.Attributes["objectIndex"].Value);
-                        if (objectIndex >= dic.Count)
-                            return;
-                        oci = dic[objectIndex].Value;
+
+                        if (interpolableNode.Attributes["saveVersion"] == null)
+                        {
+                            if (objectIndex >= dic.Count)
+                            {
+                                return;
+                            }
+
+                            oci = dic[objectIndex].Value;
+                        }
+                        else
+                        {
+                            Logger.LogInfo("loaded new version timeline objectIndex");
+
+                            if (!Studio.Studio.Instance.dicObjectCtrl.TryGetValue(objectIndex, out oci))
+                            {
+                                return;
+                            }
+
+                            Logger.LogInfo("objectIndex : " + objectIndex + "  object name :" + oci.guideObject.transformTarget.name);
+                        }
                     }
 
                     string id = interpolableNode.Attributes["id"].Value;
@@ -4290,14 +4312,31 @@ namespace Timeline
                     try
                     {
                         int objectIndex = -1;
-                        if (interpolable.oci != null)
+                        if (SaveXMLNewVer.Value == false)
                         {
-                            objectIndex = dic.FindIndex(e => e.Value == interpolable.oci);
-                            if (objectIndex == -1)
-                                return;
+                            if (interpolable.oci != null)
+                            {
+                                objectIndex = dic.FindIndex(e => e.Value == interpolable.oci);
+                                if (objectIndex == -1)
+                                    return;
+                            }
+                        }
+                        else
+                        {
+                            if (interpolable.oci != null)
+                            {
+                                objectIndex = interpolable.oci.objectInfo.dicKey;
+                                if (objectIndex == -1)
+                                    return;
+                            }
                         }
 
                         localWriter.WriteStartElement("interpolable");
+                        if (SaveXMLNewVer.Value)
+                        {
+                            localWriter.WriteAttributeString("saveVersion", "2.0");
+                        }
+
                         localWriter.WriteAttributeString("enabled", XmlConvert.ToString(interpolable.enabled));
                         localWriter.WriteAttributeString("owner", interpolable.owner);
                         if (objectIndex != -1)
@@ -4470,7 +4509,7 @@ namespace Timeline
                 _newToOldKeys.Clear();
             }
         }
-        
+
         [HarmonyPatch(typeof(Studio.Studio), "InitScene", typeof(bool))]
         private static class Studio_InitScene_Patches
         {
