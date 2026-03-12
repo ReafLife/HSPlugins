@@ -1840,7 +1840,7 @@ namespace Timeline
                                                 this.UpdateInterpolableColor(disp, col);
                                             }
                                         };
-#elif KOIKATSU
+#elif KOIKATSU || HONEYSELECT2
                                         Studio.Studio.Instance.colorPalette.visible = false;
                                         Studio.Studio.Instance.colorPalette.Setup("Interpolable Color", currentlySelectedInterpolables[0].color, (col) =>
                                         {
@@ -1851,7 +1851,6 @@ namespace Timeline
                                                 UpdateInterpolableColor(disp, col);
                                             }
                                         }, true);
-
 #endif
                                     }
                                 });
