@@ -307,7 +307,12 @@ namespace Timeline
         internal static ConfigEntry<KeyboardShortcut> ConfigKeyframeCopyShortcut { get; private set; }
         internal static ConfigEntry<KeyboardShortcut> ConfigKeyframeCutShortcut { get; private set; }
         internal static ConfigEntry<KeyboardShortcut> ConfigKeyframePasteShortcut { get; private set; }
+        internal static ConfigEntry<KeyboardShortcut> ConfigKeyframeAdd { get; private set; }
+        internal static ConfigEntry<KeyboardShortcut> ConfigSelectObject { get; private set; }
+        internal static ConfigEntry<KeyboardShortcut> ConfigSeachObject { get; private set; }
         internal static ConfigEntry<Autoplay> ConfigAutoplay { get; private set; }
+        internal static ConfigEntry<bool> SaveXMLNewVer { get; private set; }
+
 
         internal enum Autoplay
         {
@@ -327,7 +332,11 @@ namespace Timeline
             ConfigKeyframeCopyShortcut = Config.Bind("Config", "Copy Keyframes", new KeyboardShortcut(KeyCode.C, KeyCode.LeftControl));
             ConfigKeyframeCutShortcut = Config.Bind("Config", "Cut Keyframes", new KeyboardShortcut(KeyCode.X, KeyCode.LeftControl));
             ConfigKeyframePasteShortcut = Config.Bind("Config", "PasteKeyframes", new KeyboardShortcut(KeyCode.V, KeyCode.LeftControl));
+            ConfigKeyframeAdd = Config.Bind("Config", "AddKeyframes", new KeyboardShortcut(KeyCode.Space, KeyCode.LeftControl));
+            ConfigSelectObject = Config.Bind("Config", "SelectObject", new KeyboardShortcut(KeyCode.Keypad1));
+            ConfigSeachObject = Config.Bind("Config", "SeachObject", new KeyboardShortcut(KeyCode.Keypad3));
             ConfigAutoplay = Config.Bind("Config", "Autoplay", Autoplay.Ignore);
+            SaveXMLNewVer = Config.Bind("Config", "Save new version", false);
 
             _self = this;
             Logger = base.Logger;
@@ -399,6 +408,8 @@ namespace Timeline
                 while (guideObject != null)
                 {
                     ObjectCtrlInfo newOCI = Studio.Studio.Instance.dicObjectCtrl.FirstOrDefault(p => p.Value.guideObject == guideObject).Value;
+
+                    Logger.LogInfo("curr Object DicKey :" + newOCI.objectInfo.dicKey + " , name : " + newOCI.guideObject.transformTarget.name);
                     if (newOCI != null)
                     {
                         objectCtrlInfo = newOCI;
@@ -437,14 +448,49 @@ namespace Timeline
             if (_ui.gameObject.activeSelf)
             {
                 if (ConfigKeyframeCopyShortcut.Value.IsDown())
+                {
                     CopyKeyframes();
+                }
                 else if (ConfigKeyframeCutShortcut.Value.IsDown())
+                {
                     CutKeyframes();
+                }
                 else if (ConfigKeyframePasteShortcut.Value.IsDown())
+                {
                     PasteKeyframes();
+                }
+                else if (ConfigKeyframeAdd.Value.IsDown())
+                {
+                    List<Interpolable> currentlySelectedInterpolables = new List<Interpolable>(_selectedInterpolables);
+                    float time = _playbackTime % _duration;
+                    foreach (Interpolable selectedInterpolable in currentlySelectedInterpolables)
+                        AddKeyframe(selectedInterpolable, time);
+                    UpdateGrid();
+                }
+                else if (ConfigSelectObject.Value.IsDown())
+                {
+                    if (_selectedInterpolables.Count == 1)
+                    {
+                        Interpolable selectedInterpolable = _selectedInterpolables[0];
+                        GuideObject linkedGuideObject = selectedInterpolable.parameter as GuideObject;
+                        if (linkedGuideObject == null && selectedInterpolable.oci != null)
+                            linkedGuideObject = selectedInterpolable.oci.guideObject;
+
+                        if (linkedGuideObject != null)
+                        {
+                            GuideObjectManager.Instance.selectObject = linkedGuideObject;
+                        }
+                    }
+                }
+                else if (ConfigSeachObject.Value.IsDown())
+                {
+
+                }
 
                 if (_speedInputField.isFocused == false)
+                {
                     _speedInputField.text = Time.timeScale.ToString("0.#####");
+                }
             }
 
             InterpolateBefore();
@@ -518,7 +564,7 @@ namespace Timeline
             _self.Interpolate(false);
             isPlaying = false;
         }
-        
+
         /// <summary>
         /// Move playback cursor to the previous frame (based on desired framerate).
         /// </summary>
@@ -949,13 +995,13 @@ namespace Timeline
                 else
                 {
                     if (e.scrollDelta.y > 0)
-                      interpolableHeight = Mathf.Min(interpolableHeight + 1, _interpolableMaxHeight);
+                        interpolableHeight = Mathf.Min(interpolableHeight + 1, _interpolableMaxHeight);
                     else
-                      interpolableHeight = Mathf.Max(interpolableHeight - 1, _interpolableMinHeight);
+                        interpolableHeight = Mathf.Max(interpolableHeight - 1, _interpolableMinHeight);
 
                     UpdateInterpolablesView();
                 }
-              };
+            };
             DragHandler handler = _gridTop.gameObject.AddComponent<DragHandler>();
             //handler.onBeginDrag = (e) =>
             //{
@@ -1328,11 +1374,11 @@ namespace Timeline
             _verticalScrollView.verticalNormalizedPosition = 1f;    // Reset scroll position
         }
 
-        private void UpdateFilterRegex( string filterText )
+        private void UpdateFilterRegex(string filterText)
         {
             filterText = filterText.Trim();
 
-            if ( string.IsNullOrEmpty(filterText) )
+            if (string.IsNullOrEmpty(filterText))
             {
                 _interpolablesSearchRegex = new Regex(".*", RegexOptions.IgnoreCase);
                 return;
@@ -1340,8 +1386,8 @@ namespace Timeline
 
             var filters = filterText.Split('|');
             StringBuilder builder = new StringBuilder();
-            
-            for( int i = 0; i < filters.Length; ++i )
+
+            for (int i = 0; i < filters.Length; ++i)
             {
                 var filter = filters[i].Trim();
 
@@ -1388,9 +1434,9 @@ namespace Timeline
                 {
                     _interpolablesSearchRegex = new Regex(builder.ToString(), RegexOptions.IgnoreCase);
                     return;
-                }   
+                }
             }
-            catch( System.Exception e )
+            catch (System.Exception e)
             {
                 Logger.LogError(e);
             }
@@ -1425,9 +1471,9 @@ namespace Timeline
             return true;
         }
 
-        private bool IsFilterInterpolationMatch( InterpolableModel interpolableModel )
+        private bool IsFilterInterpolationMatch(InterpolableModel interpolableModel)
         {
-            if( interpolableModel is Interpolable interporable && _interpolablesSearchRegex.IsMatch(interporable.alias) )
+            if (interpolableModel is Interpolable interporable && _interpolablesSearchRegex.IsMatch(interporable.alias))
                 return true;
 
             return _interpolablesSearchRegex.IsMatch(interpolableModel.name);
@@ -1805,7 +1851,7 @@ namespace Timeline
                                                 this.UpdateInterpolableColor(disp, col);
                                             }
                                         };
-#elif KOIKATSU
+#elif KOIKATSU || HONEYSELECT2
                                         Studio.Studio.Instance.colorPalette.visible = false;
                                         Studio.Studio.Instance.colorPalette.Setup("Interpolable Color", currentlySelectedInterpolables[0].color, (col) =>
                                         {
@@ -1816,7 +1862,6 @@ namespace Timeline
                                                 UpdateInterpolableColor(disp, col);
                                             }
                                         }, true);
-
 #endif
                                     }
                                 });
@@ -2258,7 +2303,7 @@ namespace Timeline
 
             if (scrollTo)
             {
-                var rectTransform = (RectTransform)display.container.parent;                
+                var rectTransform = (RectTransform)display.container.parent;
                 var parent = (RectTransform)rectTransform.parent;
                 var view = (RectTransform)parent.parent;
 
@@ -2349,7 +2394,7 @@ namespace Timeline
                 Vector2 min = new Vector2(Mathf.Min(_areaSelectFirstPoint.x, localPoint.x), Mathf.Min(_areaSelectFirstPoint.y, localPoint.y));
                 Vector2 max = new Vector2(Mathf.Max(_areaSelectFirstPoint.x, localPoint.x), Mathf.Max(_areaSelectFirstPoint.y, localPoint.y));
 
-                if( Input.GetKey(KeyCode.LeftAlt) )
+                if (Input.GetKey(KeyCode.LeftAlt))
                 {
                     //Maximize the top and bottom of the selection
                     var rect = _keyframesContainer.rect;
@@ -2387,7 +2432,7 @@ namespace Timeline
             float minY = Mathf.Min(_areaSelectFirstPoint.y, localPoint.y);
             float maxY = Mathf.Max(_areaSelectFirstPoint.y, localPoint.y);
 
-            if (Input.GetKey(KeyCode.LeftAlt) )
+            if (Input.GetKey(KeyCode.LeftAlt))
             {
                 //Maximize the top and bottom of the selection
                 var rect = _keyframesContainer.rect;
@@ -3960,7 +4005,7 @@ namespace Timeline
             var node = GetSceneInfo() ?? new XmlDocument().CreateElement("root");
             SceneLoad(path, node);
         }
-            
+
         private void OnSceneImport(string path)
         {
             var node = GetSceneInfo();
@@ -4204,9 +4249,27 @@ namespace Timeline
                     else if (interpolableNode.Attributes["objectIndex"] != null)
                     {
                         int objectIndex = XmlConvert.ToInt32(interpolableNode.Attributes["objectIndex"].Value);
-                        if (objectIndex >= dic.Count)
-                            return;
-                        oci = dic[objectIndex].Value;
+
+                        if (interpolableNode.Attributes["saveVersion"] == null)
+                        {
+                            if (objectIndex >= dic.Count)
+                            {
+                                return;
+                            }
+
+                            oci = dic[objectIndex].Value;
+                        }
+                        else
+                        {
+                            Logger.LogInfo("loaded new version timeline objectIndex");
+
+                            if (!Studio.Studio.Instance.dicObjectCtrl.TryGetValue(objectIndex, out oci))
+                            {
+                                return;
+                            }
+
+                            Logger.LogInfo("objectIndex : " + objectIndex + "  object name :" + oci.guideObject.transformTarget.name);
+                        }
                     }
 
                     string id = interpolableNode.Attributes["id"].Value;
@@ -4290,14 +4353,31 @@ namespace Timeline
                     try
                     {
                         int objectIndex = -1;
-                        if (interpolable.oci != null)
+                        if (SaveXMLNewVer.Value == false)
                         {
-                            objectIndex = dic.FindIndex(e => e.Value == interpolable.oci);
-                            if (objectIndex == -1)
-                                return;
+                            if (interpolable.oci != null)
+                            {
+                                objectIndex = dic.FindIndex(e => e.Value == interpolable.oci);
+                                if (objectIndex == -1)
+                                    return;
+                            }
+                        }
+                        else
+                        {
+                            if (interpolable.oci != null)
+                            {
+                                objectIndex = interpolable.oci.objectInfo.dicKey;
+                                if (objectIndex == -1)
+                                    return;
+                            }
                         }
 
                         localWriter.WriteStartElement("interpolable");
+                        if (SaveXMLNewVer.Value)
+                        {
+                            localWriter.WriteAttributeString("saveVersion", "2.0");
+                        }
+
                         localWriter.WriteAttributeString("enabled", XmlConvert.ToString(interpolable.enabled));
                         localWriter.WriteAttributeString("owner", interpolable.owner);
                         if (objectIndex != -1)
@@ -4470,7 +4550,7 @@ namespace Timeline
                 _newToOldKeys.Clear();
             }
         }
-        
+
         [HarmonyPatch(typeof(Studio.Studio), "InitScene", typeof(bool))]
         private static class Studio_InitScene_Patches
         {
@@ -4488,19 +4568,19 @@ namespace Timeline
             if (go == null || !Input.GetKey(KeyCode.LeftAlt))
                 return;
 
-            var interpolables = _self._interpolables.Where(i => i.Value.parameter is GuideObject g && g == go).Select( pair => pair.Value ).ToArray();
+            var interpolables = _self._interpolables.Where(i => i.Value.parameter is GuideObject g && g == go).Select(pair => pair.Value).ToArray();
 
             if (interpolables.Length <= 0)
                 return;
 
             int select = 0;
 
-            if(interpolables.Length > 1)
+            if (interpolables.Length > 1)
             {
                 //If there is a mode selected in the studio, select that interpolation.
                 string keyword = null;
 
-                switch(manager.mode)
+                switch (manager.mode)
                 {
                     case 0:
                         keyword = "Position";
@@ -4515,10 +4595,10 @@ namespace Timeline
                         break;
                 }
 
-                if( keyword != null )
+                if (keyword != null)
                 {
-                    for( int i = 0; i < interpolables.Length; ++i )
-                        if( interpolables[i].name.Contains(keyword) )
+                    for (int i = 0; i < interpolables.Length; ++i)
+                        if (interpolables[i].name.Contains(keyword))
                         {
                             select = i;
                             break;
