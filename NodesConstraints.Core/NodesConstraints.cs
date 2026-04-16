@@ -262,7 +262,7 @@ namespace NodesConstraints
                     }
 
                     float t = Mathf.Clamp01(1.0f - smoothPos.disConnectionCurrentTime / smoothPos.disConnectionTime);
-                    
+
                     if (resetOriginalPosition)
                     {
                         targetPos = childTransform.parent != null ? childTransform.parent.TransformPoint(originalChildPosition) : originalChildPosition;
@@ -277,7 +277,7 @@ namespace NodesConstraints
                     }
                     else
                     {
-                        targetPos = Vector3.Lerp(targetPos, childTransform.position, t); 
+                        targetPos = Vector3.Lerp(targetPos, childTransform.position, t);
                         childTransform.position = targetPos;
                     }
 
@@ -376,7 +376,7 @@ namespace NodesConstraints
                     }
 
                     float t = Mathf.Clamp01(1.0f - smoothScale.disConnectionCurrentTime / smoothScale.disConnectionTime);
-                    
+
                     if (resetOriginalScale)
                     {
                         childTransform.localScale = Vector3.Lerp(smoothScale.smoothStartValue, originalChildScale, t);
@@ -750,6 +750,8 @@ namespace NodesConstraints
         #endregion
 
         internal static ConfigEntry<KeyboardShortcut> ConfigMainWindowShortcut { get; private set; }
+        internal static ConfigEntry<KeyboardShortcut> ConfigSelectParentObject { get; private set; }
+        internal static ConfigEntry<KeyboardShortcut> ConfigSelectRootObjectByName { get; private set; }
         internal static ConfigEntry<int> ConstraintsAreaHeight { get; private set; }
         internal static ConfigEntry<int> NodesAreaHeight { get; private set; }
 
@@ -773,6 +775,8 @@ namespace NodesConstraints
             base.Awake();
 
             ConfigMainWindowShortcut = Config.Bind("Config", "Open NodeConstraints UI", new KeyboardShortcut(KeyCode.I, KeyCode.LeftControl));
+            ConfigSelectParentObject = Config.Bind("Config", "Select Parent object", new KeyboardShortcut(KeyCode.Keypad1, KeyCode.LeftControl));
+            ConfigSelectRootObjectByName = Config.Bind("Config", "Select Parent object By name", new KeyboardShortcut(KeyCode.Keypad2, KeyCode.LeftControl));
             ConstraintsAreaHeight = Config.Bind("Interface", "Constraints Area Height", 150, new ConfigDescription("", new AcceptableValueRange<int>(40, 300)));
             NodesAreaHeight = Config.Bind("Interface", "Nodes Area Height", 200, new ConfigDescription("", new AcceptableValueRange<int>(40, 300)));
 
@@ -804,7 +808,7 @@ namespace NodesConstraints
             _toolbarButton = new SimpleToolbarToggle(
                 "Open window",
                 "Open NodesConstraints window. It can be used\nto attach various things to each other.\nHotkey: " + ConfigMainWindowShortcut.Value,
-                () => ResourceUtils.GetEmbeddedResource("nc_toolbar_icon.png", typeof(NodesConstraints).Assembly).LoadTexture(), 
+                () => ResourceUtils.GetEmbeddedResource("nc_toolbar_icon.png", typeof(NodesConstraints).Assembly).LoadTexture(),
                 false, this, val => ShowUI = val);
             ToolbarManager.AddLeftToolbarControl(_toolbarButton);
         }
@@ -875,13 +879,21 @@ namespace NodesConstraints
             if (Camera.main.GetComponent<Expression>() != null)
                 _totalActiveExpressions += 1; // Expression is added to MainCamera in Init()
             _currentExpressionIndex = 0;
+
             if (ConfigMainWindowShortcut.Value.IsDown())
                 ShowUI = !ShowUI;
+
             if (_onPreCullAction != null)
             {
                 _onPreCullAction();
                 _onPreCullAction = null;
             }
+
+            if (ConfigSelectParentObject.Value.IsDown())
+            {
+                SelectParentObject();
+            }
+
             _selectedWorkspaceObject = null;
             TreeNodeObject treeNode = _selectedWorkspaceObjects?.FirstOrDefault();
             if (treeNode != null)
@@ -893,6 +905,7 @@ namespace NodesConstraints
             if (_selectedWorkspaceObject != _lastSelectedWorkspaceObject && _selectedWorkspaceObject != null)
                 _selectedBone = _selectedWorkspaceObject.transformTarget;
             _lastSelectedWorkspaceObject = _selectedWorkspaceObject;
+
             if (_hasTimeline == false)
                 ApplyNodesConstraints();
 
@@ -934,8 +947,14 @@ namespace NodesConstraints
             var skin = GUI.skin;
             GUI.skin = KKAPI.Utilities.IMGUIUtils.SolidBackgroundGuiSkin;
 
+
             if (ShowUI == false)
+            {
+                
+
                 return;
+            }
+
             if (_initUI == false)
             {
                 _wrapButton = new GUIStyle(GUI.skin.button);
@@ -1164,6 +1183,35 @@ namespace NodesConstraints
                     _self._selectedBone = selectedGuideObject.transformTarget;
                 }
             }
+        }
+
+        private void SelectParentObject()
+        {
+            GuideObject selectedObject = _selectedGuideObjects.FirstOrDefault();
+            if (selectedObject == null) return;
+
+            for (int i = _constraints.Count - 1; i >= 0; i--)
+            {
+                Constraint constraint = _constraints[i];
+                if (constraint.enabled == false || constraint.parentTransform == null || constraint.childTransform == null)
+                    continue;
+
+                if (constraint.child == selectedObject)
+                {
+                    if (constraint.parent != null)
+                    {
+                        this.ExecuteDelayed(() => GuideObjectManager.Instance.selectObject = constraint.parent, 20);
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        private void SelectGuideObject(GuideObject guideObject)
+        {
+            if (guideObject == null) return;
+            GuideObjectManager.Instance.selectObject = guideObject;
         }
 
         // Applies the constraints that have GuideObjects linked (so that the underlying systems IK and FK can use those data after)

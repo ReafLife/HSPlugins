@@ -95,6 +95,7 @@ namespace HSPE.AMModules
         {
             public float weight;
             public float originalWeight;
+            public float soundWeight;
         }
 
 #if HONEYSELECT || KOIKATSU
@@ -151,7 +152,6 @@ namespace HSPE.AMModules
             public List<string> _linkKeynameList = new List<string>();
             public List<BlendRenderer> _linkedBlendRenderers = new List<BlendRenderer>();
             public SkinnedMeshRenderer _renderer;
-
 
             public void ClearOriginData()
             {
@@ -486,15 +486,23 @@ namespace HSPE.AMModules
             }
         };
 
+        private enum BlendContolMode
+        {
+            Normal = 0,
+            NonMatch = 1,
+            Audio = 2
+        }
+
         private Vector2 _skinnedMeshRenderersScroll;
         private Vector2 _blendShapesScroll;
         private Vector2 _nonMatchBlendRendererScroll;
         private Vector2 _nonMatchBlendScroll;
+        private Vector2 _soundBlendScroll;
         private BlendRenderer _faceRenderer;
         private BlendRenderer _skinnedMeshTarget;
         private BlendRenderer _nonMatchTarget;
         private string _selectedNonMathBlendName;
-        private bool _nonMatchCorrectionMode = false;
+        private BlendContolMode _currBlendControlMode = BlendContolMode.Normal;
         private bool _linkEyesComponents = true;
         private static readonly string _headCheckKey = "ct_head";
         private static readonly string _blendMatchCorrectionFileName = "__MatchCorrectionData__.xml";
@@ -538,6 +546,13 @@ namespace HSPE.AMModules
         private Dictionary<string, float> _presetWeights = new Dictionary<string, float>();
         private Dictionary<string, float> _mixResultWeight = new Dictionary<string, float>();
         private List<string> _mixTargetNames = new List<string>();
+
+        private FaceBlendShape _faceBlendShape = null;
+
+        private Dictionary<string, AudioSource> _audioSources = new Dictionary<string, AudioSource>();
+        private float _blendfactorBySound = 1.0f;
+        private BlendPresetMixMode _soundBlendMixMode = BlendPresetMixMode.Mix;
+        private AudioSource _targetAudio = null;
 
         #endregion
 
@@ -797,18 +812,41 @@ namespace HSPE.AMModules
 
                 if (GUILayout.Button(key + ((GUI.color == Color.magenta) ? "*" : "")))
                 {
-                    _nonMatchCorrectionMode = false;
+                    _currBlendControlMode = BlendContolMode.Normal;
                     _skinnedMeshTarget = currBlendRenderer.Value;
                     _lastEditedBlendShape = -1;
                 }
                 GUI.color = c;
             }
 
-            if (GUILayout.Button("nonMatched"))
+            if (GUILayout.Button("NonMatched"))
             {
                 _selectedNonMathBlendName = null;
                 _skinnedMeshTarget = null;
-                _nonMatchCorrectionMode = true;
+                _currBlendControlMode = BlendContolMode.NonMatch;
+            }
+
+            if (GUILayout.Button("AudioSources"))
+            {
+                _skinnedMeshTarget = null;
+                _audioSources.Clear();
+                _currBlendControlMode = BlendContolMode.Audio;
+                
+                foreach(var objectCtrl in Singleton<Studio.Studio>.Instance.dicObjectCtrl)
+                {
+                    AudioSource audioSource = objectCtrl.Value.guideObject.transformTarget.GetComponent<AudioSource>();
+                    
+                    if (audioSource != null)
+                    {
+                        string audioSourceKey = objectCtrl.Key + "/" + audioSource.gameObject.name;
+                        _audioSources[audioSourceKey] = audioSource;
+                        HSPE.Logger.LogInfo($"Found audio source : {audioSourceKey}");
+                    }
+                    else
+                    {
+                        HSPE.Logger.LogInfo($"No audio source found in object : {objectCtrl.Key}");
+                    }
+                }
             }
 
             GUILayout.EndScrollView();
@@ -849,7 +887,7 @@ namespace HSPE.AMModules
 
                 if (hasOriginBlend)
                 {
-                    _nonMatchCorrectionMode = false;
+                    _currBlendControlMode = BlendContolMode.Normal;
                     _nonMatchTarget = null;
                     _selectedNonMathBlendName = null;
                     foreach (var blendRenderer in _blendRenderers)
@@ -929,275 +967,323 @@ namespace HSPE.AMModules
 
             GUILayout.EndVertical();
 
-            if (_skinnedMeshTarget != null)
+            switch(_currBlendControlMode)
             {
-                if (_skinnedMeshTarget._renderer == null)
-                {
-                    SkinnedMeshRenderer[] skinnedMeshRenderers = _parent.GetComponentsInChildren<SkinnedMeshRenderer>(true);
-
-                    foreach (var renderer in skinnedMeshRenderers)
+                case BlendContolMode.Normal:
+                    if (_skinnedMeshTarget != null)
                     {
-                        string fullPath = FixFullPath(renderer.transform.GetPathFrom(_parent.transform));
-
-                        if (fullPath == _skinnedMeshTarget._fullPath)
+                        if (_skinnedMeshTarget._renderer == null)
                         {
-                            _skinnedMeshTarget._renderer = renderer;
-                            break;
-                        }
-                    }
-                }
+                            SkinnedMeshRenderer[] skinnedMeshRenderers = _parent.GetComponentsInChildren<SkinnedMeshRenderer>(true);
 
-                if (_skinnedMeshTarget._renderer == null)
-                {
-                    _blendRenderers.Remove(_skinnedMeshTarget._fullPath);
-                    _skinnedMeshTarget = null;
-                    return;
-                }
-
-                GUILayout.BeginVertical(GUI.skin.box);
-                GUILayout.BeginHorizontal();
-                GUILayout.Label("Search", GUILayout.ExpandWidth(false));
-                _search = GUILayout.TextField(_search, GUILayout.ExpandWidth(true));
-                if (GUILayout.Button("X", GUILayout.ExpandWidth(false)))
-                    _search = "";
-                GUILayout.EndHorizontal();
-
-                _blendShapesScroll = GUILayout.BeginScrollView(_blendShapesScroll, false, true, GUILayout.ExpandWidth(false));
-
-                bool zeroResult = true;
-
-                foreach (var currBlend in _skinnedMeshTarget._blendIndics)
-                {
-                    string str1;
-                    if ((_faceRenderer == _skinnedMeshTarget) && (_target.isFemale ? _femaleSeparators : _maleSeparators).TryGetValue(currBlend.Value, out str1))
-                    {
-                        GUILayout.Label(str1, GUI.skin.box);
-                    }
-
-                    string str2;
-                    if (!_blendShapeAliases.TryGetValue(currBlend.Key, out str2))
-                    {
-                        str2 = null;
-                    }
-
-                    if (str2 != null && str2.IndexOf(_search, StringComparison.CurrentCultureIgnoreCase) != -1 || currBlend.Key.IndexOf(_search, StringComparison.CurrentCultureIgnoreCase) != -1)
-                    {
-                        zeroResult = false;
-                        BlendShapeData blendShapeData1;
-                        float num1;
-                        if (_skinnedMeshTarget._dirtyBlends.TryGetValue(currBlend.Key, out blendShapeData1))
-                        {
-                            num1 = blendShapeData1.weight;
-                            GUI.color = Color.magenta;
-                        }
-                        else
-                        {
-                            num1 = _skinnedMeshTarget._renderer.GetBlendShapeWeight(currBlend.Value);
-                        }
-
-                        GUILayout.BeginHorizontal();
-                        GUILayout.BeginVertical(GUILayout.ExpandHeight(false));
-                        GUILayout.BeginHorizontal();
-                        if (_renameIndex != currBlend.Value)
-                        {
-                            GUILayout.Label(string.Format("{0} {1}", currBlend.Value, str2 == null ? currBlend.Key : str2));
-                            GUILayout.FlexibleSpace();
-                        }
-                        else
-                        {
-                            GUILayout.Label(currBlend.Value.ToString(), GUILayout.ExpandWidth(false));
-                            _renameString = GUILayout.TextField(_renameString, GUILayout.ExpandWidth(true));
-                        }
-
-                        if (GUILayout.Button(_renameIndex != currBlend.Value ? "Rename" : "Save", GUILayout.ExpandWidth(false)))
-                        {
-                            if (_renameIndex != currBlend.Value)
+                            foreach (var renderer in skinnedMeshRenderers)
                             {
-                                _renameIndex = currBlend.Value;
-                                _renameString = str2 == null ? currBlend.Key : str2;
-                            }
-                            else
-                            {
-                                _renameIndex = -1;
-                                _renameString = _renameString.Trim();
-                                if (_renameString.IsNullOrEmpty() || _renameString == currBlend.Key)
+                                string fullPath = FixFullPath(renderer.transform.GetPathFrom(_parent.transform));
+
+                                if (fullPath == _skinnedMeshTarget._fullPath)
                                 {
-                                    if (_blendShapeAliases.ContainsKey(currBlend.Key))
-                                    {
-                                        _blendShapeAliases.Remove(currBlend.Key);
-                                    }
+                                    _skinnedMeshTarget._renderer = renderer;
+                                    break;
                                 }
-                                else if (!_blendShapeAliases.ContainsKey(currBlend.Key))
+                            }
+                        }
+
+                        if (_skinnedMeshTarget._renderer == null)
+                        {
+                            _blendRenderers.Remove(_skinnedMeshTarget._fullPath);
+                            _skinnedMeshTarget = null;
+                            return;
+                        }
+
+                        GUILayout.BeginVertical(GUI.skin.box);
+                        GUILayout.BeginHorizontal();
+                        GUILayout.Label("Search", GUILayout.ExpandWidth(false));
+                        _search = GUILayout.TextField(_search, GUILayout.ExpandWidth(true));
+                        if (GUILayout.Button("X", GUILayout.ExpandWidth(false)))
+                            _search = "";
+                        GUILayout.EndHorizontal();
+
+                        _blendShapesScroll = GUILayout.BeginScrollView(_blendShapesScroll, false, true, GUILayout.ExpandWidth(false));
+
+                        bool zeroResult = true;
+
+                        foreach (var currBlend in _skinnedMeshTarget._blendIndics)
+                        {
+                            string str1;
+                            if ((_faceRenderer == _skinnedMeshTarget) && (_target.isFemale ? _femaleSeparators : _maleSeparators).TryGetValue(currBlend.Value, out str1))
+                            {
+                                GUILayout.Label(str1, GUI.skin.box);
+                            }
+
+                            string str2;
+                            if (!_blendShapeAliases.TryGetValue(currBlend.Key, out str2))
+                            {
+                                str2 = null;
+                            }
+
+                            if (str2 != null && str2.IndexOf(_search, StringComparison.CurrentCultureIgnoreCase) != -1 || currBlend.Key.IndexOf(_search, StringComparison.CurrentCultureIgnoreCase) != -1)
+                            {
+                                zeroResult = false;
+                                BlendShapeData blendShapeData1;
+                                float num1;
+                                if (_skinnedMeshTarget._dirtyBlends.TryGetValue(currBlend.Key, out blendShapeData1))
                                 {
-                                    _blendShapeAliases.Add(currBlend.Key, _renameString);
+                                    num1 = blendShapeData1.weight;
+                                    GUI.color = Color.magenta;
                                 }
                                 else
                                 {
-                                    _blendShapeAliases[currBlend.Key] = _renameString;
+                                    num1 = _skinnedMeshTarget._renderer.GetBlendShapeWeight(currBlend.Value);
                                 }
+
+                                GUILayout.BeginHorizontal();
+                                GUILayout.BeginVertical(GUILayout.ExpandHeight(false));
+                                GUILayout.BeginHorizontal();
+                                if (_renameIndex != currBlend.Value)
+                                {
+                                    GUILayout.Label(string.Format("{0} {1}", currBlend.Value, str2 == null ? currBlend.Key : str2));
+                                    GUILayout.FlexibleSpace();
+                                }
+                                else
+                                {
+                                    GUILayout.Label(currBlend.Value.ToString(), GUILayout.ExpandWidth(false));
+                                    _renameString = GUILayout.TextField(_renameString, GUILayout.ExpandWidth(true));
+                                }
+
+                                if (GUILayout.Button(_renameIndex != currBlend.Value ? "Rename" : "Save", GUILayout.ExpandWidth(false)))
+                                {
+                                    if (_renameIndex != currBlend.Value)
+                                    {
+                                        _renameIndex = currBlend.Value;
+                                        _renameString = str2 == null ? currBlend.Key : str2;
+                                    }
+                                    else
+                                    {
+                                        _renameIndex = -1;
+                                        _renameString = _renameString.Trim();
+                                        if (_renameString.IsNullOrEmpty() || _renameString == currBlend.Key)
+                                        {
+                                            if (_blendShapeAliases.ContainsKey(currBlend.Key))
+                                            {
+                                                _blendShapeAliases.Remove(currBlend.Key);
+                                            }
+                                        }
+                                        else if (!_blendShapeAliases.ContainsKey(currBlend.Key))
+                                        {
+                                            _blendShapeAliases.Add(currBlend.Key, _renameString);
+                                        }
+                                        else
+                                        {
+                                            _blendShapeAliases[currBlend.Key] = _renameString;
+                                        }
+                                    }
+                                }
+                                GUILayout.Label(num1.ToString("000"), GUILayout.ExpandWidth(false));
+                                GUILayout.EndHorizontal();
+
+                                GUILayout.BeginHorizontal();
+                                float num2 = GUILayout.HorizontalSlider(num1, 0.0f, 100f);
+                                if (GUILayout.Button("-1", GUILayout.ExpandWidth(false)))
+                                {
+                                    --num2;
+                                }
+
+                                if (GUILayout.Button("+1", GUILayout.ExpandWidth(false)))
+                                {
+                                    ++num2;
+                                }
+
+                                float weight = Mathf.Clamp(num2, 0.0f, 100f);
+                                GUILayout.EndHorizontal();
+
+                                if (!Mathf.Approximately(weight, num1))
+                                {
+                                    _lastEditedBlendShape = currBlend.Value;
+                                    _skinnedMeshTarget.SetBlendShapeWeight(currBlend.Key, weight);
+
+                                    if (_linkEyesComponents)
+                                    {
+                                        _skinnedMeshTarget.ApplyLink(weight, currBlend.Value);
+
+                                    }
+                                }
+                                GUILayout.EndVertical();
+                                GUI.color = Color.red;
+                                if (GUILayout.Button("Reset", GUILayout.ExpandWidth(false), GUILayout.Height(50f)))
+                                {
+                                    _skinnedMeshTarget.NonDirty(currBlend.Key);
+
+                                    if (_linkEyesComponents)
+                                    {
+                                        _skinnedMeshTarget.ApplyLink(0.0f, currBlend.Value, true);
+                                    }
+                                }
+
+                                GUILayout.EndHorizontal();
+                                GUI.color = c;
                             }
                         }
-                        GUILayout.Label(num1.ToString("000"), GUILayout.ExpandWidth(false));
-                        GUILayout.EndHorizontal();
 
-                        GUILayout.BeginHorizontal();
-                        float num2 = GUILayout.HorizontalSlider(num1, 0.0f, 100f);
-                        if (GUILayout.Button("-1", GUILayout.ExpandWidth(false)))
+                        if (zeroResult)
                         {
-                            --num2;
-                        }
-
-                        if (GUILayout.Button("+1", GUILayout.ExpandWidth(false)))
-                        {
-                            ++num2;
-                        }
-
-                        float weight = Mathf.Clamp(num2, 0.0f, 100f);
-                        GUILayout.EndHorizontal();
-
-                        if (!Mathf.Approximately(weight, num1))
-                        {
-                            _lastEditedBlendShape = currBlend.Value;
-                            _skinnedMeshTarget.SetBlendShapeWeight(currBlend.Key, weight);
-
-                            if (_linkEyesComponents)
-                            {
-                                _skinnedMeshTarget.ApplyLink(weight, currBlend.Value);
-
-                            }
-                        }
-                        GUILayout.EndVertical();
-                        GUI.color = Color.red;
-                        if (GUILayout.Button("Reset", GUILayout.ExpandWidth(false), GUILayout.Height(50f)))
-                        {
-                            _skinnedMeshTarget.NonDirty(currBlend.Key);
-
-                            if (_linkEyesComponents)
-                            {
-                                _skinnedMeshTarget.ApplyLink(0.0f, currBlend.Value, true);
-                            }
-                        }
-
-                        GUILayout.EndHorizontal();
-                        GUI.color = c;
-                    }
-                }
-
-                if (zeroResult)
-                {
-                    GUILayout.BeginHorizontal();
-                    GUILayout.FlexibleSpace();
-                    GUILayout.EndHorizontal();
-                }
-
-                GUILayout.EndScrollView();
-
-                GUILayout.BeginHorizontal();
-                GUI.color = Color.red;
-                GUILayout.FlexibleSpace();
-                if (GUILayout.Button("Reset", GUILayout.ExpandWidth(false)))
-                {
-                    _skinnedMeshTarget.ClearDirty();
-                }
-
-                GUI.color = c;
-                GUILayout.EndHorizontal();
-                GUILayout.EndVertical();
-            }
-            else if (_nonMatchCorrectionMode)
-            {
-                if (_headOriginBlendRenderers.Count > 0)
-                {
-                    GUILayout.BeginVertical(GUI.skin.box);
-
-                    GUILayout.BeginHorizontal();
-                    GUILayout.Label("Mismatch blend list", GUI.skin.box);
-                    GUILayout.EndHorizontal();
-
-                    _nonMatchBlendScroll = GUILayout.BeginScrollView(_nonMatchBlendScroll, false, true, GUI.skin.horizontalScrollbar, GUI.skin.verticalScrollbar, GUI.skin.box, GUILayout.ExpandWidth(false));
-                    bool notingMatch = true;
-
-                    foreach (var currBlendRenderer in _blendRenderers)
-                    {
-                        foreach (var nonMatchedBlend in currBlendRenderer.Value._nonMatchedOriBlendsNames)
-                        {
-                            notingMatch = false;
-
-                            GUI.color = c;
-                            if (currBlendRenderer.Value == _nonMatchTarget && _selectedNonMathBlendName == nonMatchedBlend)
-                            {
-                                GUI.color = Color.magenta;
-                            }
-
-                            if (GUILayout.Button(nonMatchedBlend))
-                            {
-                                _selectedNonMathBlendName = nonMatchedBlend;
-                                _nonMatchTarget = currBlendRenderer.Value;
-                            }
-                        }
-                    }
-
-                    GUI.color = c;
-
-                    if (notingMatch)
-                    {
-                        GUILayout.Label("There's nothing that didn't match", GUI.skin.box);
-                    }
-
-                    GUILayout.EndScrollView();
-                    GUILayout.EndVertical();
-
-                    if (_selectedNonMathBlendName != null)
-                    {
-                        GUILayout.BeginVertical(GUI.skin.box);
-
-                        GUILayout.BeginHorizontal();
-                        GUILayout.Label("target list", GUI.skin.box);
-                        GUILayout.EndHorizontal();
-
-                        _nonMatchBlendRendererScroll = GUILayout.BeginScrollView(_nonMatchBlendRendererScroll, false, true, GUI.skin.horizontalScrollbar, GUI.skin.verticalScrollbar, GUI.skin.box, GUILayout.ExpandWidth(false));
-
-                        string correctName = null;
-                        _nonMatchTarget._nonMatchBlendCorrection.TryGetValue(_selectedNonMathBlendName, out correctName);
-
-                        foreach (var currBlend in _nonMatchTarget._blendIndics)
-                        {
-                            GUI.color = c;
-                            if (correctName == currBlend.Key)
-                            {
-                                GUI.color = Color.magenta;
-                            }
-
-                            if (GUILayout.Button(currBlend.Key))
-                            {
-                                _matchCorractionList[_selectedNonMathBlendName] = currBlend.Key;
-                                _nonMatchTarget._nonMatchBlendCorrection[_selectedNonMathBlendName] = currBlend.Key;
-                            }
+                            GUILayout.BeginHorizontal();
+                            GUILayout.FlexibleSpace();
+                            GUILayout.EndHorizontal();
                         }
 
                         GUILayout.EndScrollView();
-                        GUILayout.EndVertical();
+
+                        GUILayout.BeginHorizontal();
+                        GUI.color = Color.red;
+                        GUILayout.FlexibleSpace();
+                        if (GUILayout.Button("Reset", GUILayout.ExpandWidth(false)))
+                        {
+                            _skinnedMeshTarget.ClearDirty();
+                        }
 
                         GUI.color = c;
+                        GUILayout.EndHorizontal();
+                        GUILayout.EndVertical();
                     }
-                }
-                else
-                {
-                    GUILayout.BeginVertical(GUI.skin.box);
+                    break;
+                case BlendContolMode.NonMatch:
+                    {
+                        if (_headOriginBlendRenderers.Count > 0)
+                        {
+                            GUILayout.BeginVertical(GUI.skin.box);
 
-                    GUILayout.BeginHorizontal();
-                    GUILayout.Label("Originchar not selected", GUI.skin.box);
-                    GUILayout.EndHorizontal();
-                    GUILayout.EndVertical();
-                }
-            }
-            else
-            {
-                GUILayout.BeginVertical();
-                GUILayout.BeginHorizontal();
-                GUILayout.FlexibleSpace();
-                GUILayout.EndHorizontal();
-                GUILayout.EndVertical();
+                            GUILayout.BeginHorizontal();
+                            GUILayout.Label("Mismatch blend list", GUI.skin.box);
+                            GUILayout.EndHorizontal();
+
+                            _nonMatchBlendScroll = GUILayout.BeginScrollView(_nonMatchBlendScroll, false, true, GUI.skin.horizontalScrollbar, GUI.skin.verticalScrollbar, GUI.skin.box, GUILayout.ExpandWidth(false));
+                            bool notingMatch = true;
+
+                            foreach (var currBlendRenderer in _blendRenderers)
+                            {
+                                foreach (var nonMatchedBlend in currBlendRenderer.Value._nonMatchedOriBlendsNames)
+                                {
+                                    notingMatch = false;
+
+                                    GUI.color = c;
+                                    if (currBlendRenderer.Value == _nonMatchTarget && _selectedNonMathBlendName == nonMatchedBlend)
+                                    {
+                                        GUI.color = Color.magenta;
+                                    }
+
+                                    if (GUILayout.Button(nonMatchedBlend))
+                                    {
+                                        _selectedNonMathBlendName = nonMatchedBlend;
+                                        _nonMatchTarget = currBlendRenderer.Value;
+                                    }
+                                }
+                            }
+
+                            GUI.color = c;
+
+                            if (notingMatch)
+                            {
+                                GUILayout.Label("There's nothing that didn't match", GUI.skin.box);
+                            }
+
+                            GUILayout.EndScrollView();
+                            GUILayout.EndVertical();
+
+                            if (_selectedNonMathBlendName != null)
+                            {
+                                GUILayout.BeginVertical(GUI.skin.box);
+
+                                GUILayout.BeginHorizontal();
+                                GUILayout.Label("target list", GUI.skin.box);
+                                GUILayout.EndHorizontal();
+
+                                _nonMatchBlendRendererScroll = GUILayout.BeginScrollView(_nonMatchBlendRendererScroll, false, true, GUI.skin.horizontalScrollbar, GUI.skin.verticalScrollbar, GUI.skin.box, GUILayout.ExpandWidth(false));
+
+                                string correctName = null;
+                                _nonMatchTarget._nonMatchBlendCorrection.TryGetValue(_selectedNonMathBlendName, out correctName);
+
+                                foreach (var currBlend in _nonMatchTarget._blendIndics)
+                                {
+                                    GUI.color = c;
+                                    if (correctName == currBlend.Key)
+                                    {
+                                        GUI.color = Color.magenta;
+                                    }
+
+                                    if (GUILayout.Button(currBlend.Key))
+                                    {
+                                        _matchCorractionList[_selectedNonMathBlendName] = currBlend.Key;
+                                        _nonMatchTarget._nonMatchBlendCorrection[_selectedNonMathBlendName] = currBlend.Key;
+                                    }
+                                }
+
+                                GUILayout.EndScrollView();
+                                GUILayout.EndVertical();
+
+                                GUI.color = c;
+                            }
+                        }
+                        else
+                        {
+                            GUILayout.BeginVertical(GUI.skin.box);
+
+                            GUILayout.BeginHorizontal();
+                            GUILayout.Label("Originchar not selected", GUI.skin.box);
+                            GUILayout.EndHorizontal();
+                            GUILayout.EndVertical();
+                        }
+                    }
+                    break;
+                case BlendContolMode.Audio:
+                    {
+                        if (_audioSources.Count > 0)
+                        {
+                            GUILayout.BeginVertical(GUI.skin.box);
+
+                            GUILayout.BeginHorizontal();
+                            GUILayout.Label("Mismatch blend list", GUI.skin.box);
+                            GUILayout.EndHorizontal();
+
+                            _soundBlendScroll = GUILayout.BeginScrollView(_soundBlendScroll, false, true, GUI.skin.horizontalScrollbar, GUI.skin.verticalScrollbar, GUI.skin.box, GUILayout.ExpandWidth(false));
+
+                            foreach (var audioSource in _audioSources)
+                            {
+                                GUI.color = c;
+                                if (_targetAudio == audioSource.Value)
+                                {
+                                    GUI.color = Color.magenta;
+                                }
+                                if (GUILayout.Button(audioSource.Key))
+                                {
+                                    _targetAudio = audioSource.Value;
+                                }
+                            }
+
+                            GUI.color = c;
+
+                            GUILayout.EndScrollView();
+                            GUILayout.EndVertical();
+                        }
+                        else
+                        {
+                            GUILayout.BeginVertical(GUI.skin.box);
+
+                            GUILayout.BeginHorizontal();
+                            GUILayout.Label("Not found audio resource", GUI.skin.box);
+                            GUILayout.EndHorizontal();
+                            GUILayout.EndVertical();
+                        }
+                    }
+                    break;
+                default:
+                    {
+                        GUILayout.BeginVertical();
+                        GUILayout.BeginHorizontal();
+                        GUILayout.FlexibleSpace();
+                        GUILayout.EndHorizontal();
+                        GUILayout.EndVertical();
+                    }
+                    break;
             }
 
             GUILayout.EndHorizontal();
@@ -1874,7 +1960,7 @@ namespace HSPE.AMModules
 
         private void RefreshSkinnedMeshRendererList()
         {
-            _nonMatchCorrectionMode = false;
+            _currBlendControlMode = BlendContolMode.Normal;
             _nonMatchTarget = null;
             _selectedNonMathBlendName = null;
 
@@ -2221,7 +2307,7 @@ namespace HSPE.AMModules
                         interpolateBefore: (oci, parameter, leftValue, rightValue, factor) =>
                         {
                             GroupParameter p = (GroupParameter)parameter;
-
+                            
                             if (p.editor._isBusy == false)
                             {
                                 BlendRenderer renderer = p.blendRenderer;
